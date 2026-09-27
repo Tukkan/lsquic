@@ -2483,6 +2483,63 @@ test_header_processing_error_stays_message_error (void)
 }
 
 
+#if LSQUIC_WEBTRANSPORT_SERVER_SUPPORT
+/* A WebTransport bidirectional stream sends no headers.  Once its signal
+ * has been read, what it may write must come from the flow control
+ * windows, not from the QPACK encoder stream: that allowance applies to
+ * an HTTP/3 stream only until its header block has been sent.
+ */
+static void
+test_webtransport_stream_write_avail (void)
+{
+    struct test_objs tobjs;
+    struct lsquic_stream *stream;
+    struct stream_frame *frame;
+    ssize_t nr, nw;
+    int s;
+    unsigned char buf[0x10];
+    unsigned char data[0x300];
+
+    init_test_ctl_settings(&g_ctl_settings);
+
+    stream_ctor_flags |= SCF_IETF;
+    init_test_objs(&tobjs, 0x4000, 0x4000, 1252);
+    tobjs.ctor_flags |= SCF_HTTP|SCF_IETF;
+    tobjs.lconn.cn_flags |= LSCONN_SERVER;
+    tobjs.eng_pub.enp_settings.es_webtransport_server = 1;
+
+    /* The peer allows 0x100 bytes on this stream */
+    stream = new_stream(&tobjs, 0, 0x100);
+
+    /* WEBTRANSPORT_STREAM signal 0x41, session ID 0, one byte of data */
+    frame = new_frame_in_ext(&tobjs, 0, 4, 0,
+                                    (uint8_t[4]){ 0x40, 0x41, 0, 'a', });
+    s = lsquic_stream_frame_in(stream, frame);
+    assert(s == 0);     /* Self-check */
+
+    nr = lsquic_stream_read(stream, buf, sizeof(buf));
+    assert(nr == 1);
+    assert(buf[0] == 'a');
+    assert(lsquic_stream_is_webtransport_client_bidi_stream(stream));
+
+    assert(lsquic_stream_write_avail(stream) == 0x100);
+    memset(data, 'A', sizeof(data));
+    nw = lsquic_stream_write(stream, data, sizeof(data));
+    assert(nw == 0x100);
+    assert(lsquic_stream_write_avail(stream) == 0);
+
+    /* MAX_STREAM_DATA makes room again */
+    lsquic_stream_window_update(stream, 0x180);
+    assert(lsquic_stream_write_avail(stream) == 0x80);
+
+    lsquic_stream_destroy(stream);
+    deinit_test_objs(&tobjs);
+
+    stream_ctor_flags &= ~SCF_IETF;
+}
+#endif
+
+
 int
 main (int argc, char **argv)
 {
@@ -2570,6 +2627,9 @@ main (int argc, char **argv)
             test_content_length_max_value_ignores_stale_errno();
             test_content_length_overflow_is_rejected();
             test_header_processing_error_stays_message_error();
+#if LSQUIC_WEBTRANSPORT_SERVER_SUPPORT
+            test_webtransport_stream_write_avail();
+#endif
             break;
         default:
             fprintf(stderr, "Unknown test subset: %d\n", test_subset);
@@ -2600,6 +2660,9 @@ main (int argc, char **argv)
         test_content_length_max_value_ignores_stale_errno();
         test_content_length_overflow_is_rejected();
         test_header_processing_error_stays_message_error();
+#if LSQUIC_WEBTRANSPORT_SERVER_SUPPORT
+        test_webtransport_stream_write_avail();
+#endif
     }
 
     return 0;

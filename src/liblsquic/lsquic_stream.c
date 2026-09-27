@@ -4972,6 +4972,9 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
                     stream->sm_bflags |= SMBF_WEBTRANSPORT_CLIENT_BIDI_STREAM;
                     // disable header processing as we will not have any headers for this stream anymore
                     stream->sm_bflags &= ~SMBF_USE_HEADERS;
+                    // no headers will be sent either: take write availability from the stream
+                    // and connection flow control windows, not from the QPACK encoder stream
+                    stream->sm_write_avail = stream_write_avail_no_frames;
                     filter->hqfi_type = HQFT_DATA;
                     filter->hqfi_left = UINT64_MAX; // set data size infinite to keep processing till stream reset
                     goto end;
